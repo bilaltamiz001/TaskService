@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using TaskService.Application.Models;
@@ -20,16 +21,34 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Override configuration to use in-memory SQLite for tests
+        builder.ConfigureAppConfiguration((context, config) =>
+        {
+            // Set test environment
+            context.HostingEnvironment.EnvironmentName = "Test";
+
+            // Override with in-memory SQLite configuration
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                { "DatabaseProvider", "Sqlite" },
+                { "ConnectionStrings:DefaultConnection", "Data Source=:memory:" }
+            });
+        });
+
         builder.ConfigureServices(services =>
         {
+            // Remove any existing DbContext registrations to prevent provider conflicts
             services.RemoveAll(typeof(DbContextOptions<TaskDbContext>));
             services.RemoveAll(typeof(TaskDbContext));
 
+            // Create in-memory SQLite connection
             _connection = new SqliteConnection("DataSource=:memory:");
             _connection.Open();
 
-            services.AddDbContext<TaskDbContext>(options =>
-                options.UseSqlite(_connection));
+            // Register DbContext with in-memory SQLite
+            services.AddDbContext<TaskDbContext>(
+                options => options.UseSqlite(_connection),
+                contextLifetime: ServiceLifetime.Scoped);
         });
     }
 
@@ -39,7 +58,6 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
         {
             _connection?.Dispose();
         }
-
         base.Dispose(disposing);
     }
 }
