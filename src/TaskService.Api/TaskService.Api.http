@@ -1,0 +1,33 @@
+@TaskService_HostAddress = https://localhost:7150
+
+### Create a task
+POST {{TaskService_HostAddress}}/api/tasks
+Content-Type: application/json
+
+{
+  "title": "Implement Task Service",
+  "description": "Build REST API with CRUD operations",
+  "status": "Todo",
+  "originalEstimatedWork": 8
+}
+
+### List all tasks
+GET {{TaskService_HostAddress}}/api/tasks
+
+### Get task by id
+@taskId = 00000000-0000-0000-0000-000000000000
+GET {{TaskService_HostAddress}}/api/tasks/{{taskId}}
+
+### Update task
+PUT {{TaskService_HostAddress}}/api/tasks/{{taskId}}
+Content-Type: application/json
+
+{
+  "title": "Implement Task Service",
+  "description": "Updated description",
+  "status": "InProgress",
+  "originalEstimatedWork": 10
+}
+
+### Delete task
+DELETE {{TaskService_HostAddress}}/api/tasks/{{taskId}}
