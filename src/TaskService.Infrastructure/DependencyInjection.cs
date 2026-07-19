@@ -1,6 +1,8 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using TaskService.Application.Interfaces;
 using TaskService.Infrastructure.Data;
 using TaskService.Infrastructure.Repositories;
@@ -11,21 +13,14 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        var databaseProvider = configuration.GetSection("DatabaseProvider").Value ?? "Sqlite";
         var connectionString = configuration.GetConnectionString("DefaultConnection");
 
         services.AddDbContext<TaskDbContext>(options =>
         {
-            if (databaseProvider.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
+            options.UseSqlServer(connectionString, sqlOptions =>
             {
-                options.UseSqlServer(connectionString);
-            }
-            else
-            {
-                // Default to SQLite
-                connectionString ??= "Data Source=taskservice.db";
-                options.UseSqlite(connectionString);
-            }
+                sqlOptions.CommandTimeout(300); // 5 minutes for long-running operations
+            });
         });
 
         services.AddScoped<ITaskRepository, TaskRepository>();
@@ -35,20 +30,97 @@ public static class DependencyInjection
 
     public static async Task ApplyMigrationsAsync(this IServiceProvider serviceProvider)
     {
-        using var scope = serviceProvider.CreateScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<TaskDbContext>();
+        var logger = serviceProvider.GetRequiredService<ILogger<TaskDbContext>>();
+        const int maxRetries = 3;
+        const int delayMilliseconds = 2000;
 
-        try
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            await dbContext.Database.EnsureCreatedAsync();
-            // Only seed data if this is not a test environment
-            await SeedDummyDataAsync(dbContext);
+            try
+            {
+                using var scope = serviceProvider.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<TaskDbContext>();
+
+                logger.LogInformation("Applying migrations (Attempt {Attempt}/{MaxRetries})", attempt, maxRetries);
+
+                await dbContext.Database.EnsureCreatedAsync();
+                logger.LogInformation("Database created successfully");
+
+                // Only seed data if this is not a test environment
+                await SeedDummyDataAsync(dbContext);
+                logger.LogInformation("Database seeded successfully");
+
+                return; // Success - exit the retry loop
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("database providers"))
+            {
+                // Silently handle if multiple providers are registered (test scenario)
+                // The test factory will handle database setup separately
+                logger.LogWarning(ex, "Multiple database providers registered - skipping migrations for test scenario");
+                return;
+            }
+            catch (SqlException ex) when (IsTransientError(ex))
+            {
+                logger.LogWarning(ex, "Transient database error occurred. Retrying... (Attempt {Attempt}/{MaxRetries})", attempt, maxRetries);
+
+                if (attempt < maxRetries)
+                {
+                    // Exponential backoff: delay increases with each retry
+                    int delay = delayMilliseconds * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delay);
+                }
+                else
+                {
+                    logger.LogError(ex, "Failed to apply migrations after {MaxRetries} attempts", maxRetries);
+                    throw;
+                }
+            }
+            catch (OperationCanceledException ex)
+            {
+                logger.LogWarning(ex, "Database operation timed out. Retrying... (Attempt {Attempt}/{MaxRetries})", attempt, maxRetries);
+
+                if (attempt < maxRetries)
+                {
+                    int delay = delayMilliseconds * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delay);
+                }
+                else
+                {
+                    logger.LogError(ex, "Failed to apply migrations after {MaxRetries} attempts due to timeout", maxRetries);
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Unexpected error applying migrations");
+                throw;
+            }
         }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("database providers"))
+    }
+
+    private static bool IsTransientError(SqlException ex)
+    {
+        // SQL Server transient error numbers
+        // -2: Timeout
+        // -1: Network error
+        // 2: Connection broken
+        // 53: Connection broken
+        // 64: Communication link failure
+        // 233: Connection initialization error
+        // 40197: Transient error (Azure)
+        // 40501: Service temporarily busy (Azure)
+        // 40613: Database unavailable (Azure)
+        int[] transientErrorNumbers = { -2, -1, 2, 53, 64, 233, 40197, 40501, 40613 };
+
+        foreach (SqlError error in ex.Errors)
         {
-            // Silently handle if multiple providers are registered (test scenario)
-            // The test factory will handle database setup separately
+            if (transientErrorNumbers.Contains(error.Number))
+            {
+                return true;
+            }
         }
+
+        return false;
     }
 
     private static async Task SeedDummyDataAsync(TaskDbContext dbContext)

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using TaskService.Domain.Enums;
 
 namespace TaskService.Application.Models;
@@ -15,5 +16,6 @@ public class CreateTaskRequest
     public TaskItemStatus Status { get; set; } = TaskItemStatus.Todo;
 
     [Range(0, double.MaxValue)]
+    [JsonPropertyName("originalEstimatedWork")]
     public decimal OriginalEstimatedWork { get; set; }
 }

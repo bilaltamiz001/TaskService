@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using TaskService.Domain.Enums;
 
 namespace TaskService.Application.Models;
@@ -12,6 +13,7 @@ public class TaskResponse
 
     public TaskItemStatus Status { get; set; }
 
+    [JsonPropertyName("originalEstimatedWork")]
     public decimal OriginalEstimatedWork { get; set; }
 
     public DateTime CreatedAt { get; set; }
